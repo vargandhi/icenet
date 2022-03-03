@@ -23,6 +23,10 @@ import IceNetConsts._
  * @checksumOffload TCP checksum offload engine
  * @packetMaxBytes Maximum number of bytes in a packet (header size + MTU)
  */
+
+/*
+ *  test commit NIC 1 
+ */
 case class NICConfig(
   inBufFlits: Int  = 2 * ETH_STANDARD_MAX_BYTES / NET_IF_BYTES,
   outBufFlits: Int = 2 * ETH_STANDARD_MAX_BYTES / NET_IF_BYTES,
