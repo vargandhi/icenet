@@ -86,10 +86,27 @@ class IceNicRecvIO extends Bundle {
 trait IceNicControllerBundle extends Bundle {
   val send = new IceNicSendIO
   val recv = new IceNicRecvIO
+ 
+  val send2 = new IceNicSendIO
+  val recv2 = new IceNicRecvIO
+ 
   val macAddr = Input(UInt(ETH_MAC_BITS.W))
+  val macAddr2 = Input(UInt(ETH_MAC_BITS.W))
+
   val txcsumReq = Decoupled(new ChecksumRewriteRequest)
+  val txcsumReq2 = Decoupled(new ChecksumRewriteRequest)
+  
   val rxcsumRes = Flipped(Decoupled(new TCPChecksumOffloadResult))
+  val rxcsumRes2 = Flipped(Decoupled(new TCPChecksumOffloadResult))   
+
+
   val csumEnable = Output(Bool())
+  val csumEnable2 = Output(Bool())
+
+
+  val coreMem1 = Input(UInt(BUF_REQ_BITS.W))
+  val coreMem2 = Input(UInt(BUF_REQ_BITS.W))
+
 }
 
 trait IceNicControllerModule extends HasRegMap with HasNICParameters {
@@ -97,6 +114,7 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   val io: IceNicControllerBundle
 
   val sendCompDown = WireInit(false.B)
+  val sendCompDown2 = WireInit(false.B)
 
   val qDepth = ctrlQueueDepth
   require(qDepth < (1 << 8))
@@ -107,38 +125,78 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   // hold (len, addr) of packets that we need to send out
   val sendReqQueue = Module(new HellaQueue(qDepth)(UInt(NET_IF_WIDTH.W)))
   val sendReqCount = queueCount(sendReqQueue.io, qDepth)
+  
+  val sendReqQueue2 = Module(new HellaQueue(qDepth)(UInt(NET_IF_WIDTH.W)))
+  val sendReqCount2 = queueCount(sendReqQueue2.io, qDepth)
+  
   // hold addr of buffers we can write received packets into
   val recvReqQueue = Module(new HellaQueue(qDepth)(UInt(NET_IF_WIDTH.W)))
   val recvReqCount = queueCount(recvReqQueue.io, qDepth)
+  
+  val recvReqQueue2 = Module(new HellaQueue(qDepth)(UInt(NET_IF_WIDTH.W)))
+  val recvReqCount2 = queueCount(recvReqQueue2.io, qDepth)
+
   // count number of sends completed
   val sendCompCount = TwoWayCounter(io.send.comp.fire, sendCompDown, qDepth)
+  
+  // count the number of sends completed on core2
+  val sendCompCount2 = TwoWayCounter(io.send2.comp.fire, sendCompDown2, qDepth)
+
   // hold length of received packets
   val recvCompQueue = Module(new HellaQueue(qDepth)(UInt(NET_LEN_BITS.W)))
   val recvCompCount = queueCount(recvCompQueue.io, qDepth)
 
+  // hold length of received packets for core 2
+  val recvCompQueue2 = Module(new HellaQueue(qDepth)(UInt(NET_LEN_BITS.W)))
+  val recvCompCount2 = queueCount(recvCompQueue2.io, qDepth)
+
+
   val sendCompValid = sendCompCount > 0.U
-  val intMask = RegInit(0.U(2.W))
+  val sendCompValid2 = sendCompCount2 > 0.U
+  
+  val intMask = RegInit(0.U(4.W))
 
   io.send.req <> sendReqQueue.io.deq
   io.recv.req <> recvReqQueue.io.deq
   io.send.comp.ready := sendCompCount < qDepth.U
   recvCompQueue.io.enq <> io.recv.comp
 
+  io.send2.req <> sendReqQueue2.io.deq
+  io.recv2.req <> recvReqQueue2.io.deq
+  io.send2.comp.ready := sendCompCount2 < qDepth.U
+  recvCompQueue2.io.enq <> io.recv2.comp
+
   interrupts(0) := sendCompValid && intMask(0)
   interrupts(1) := recvCompQueue.io.deq.valid && intMask(1)
 
+  interrupts(2) := sendCompValid2 && intMask(2) 
+  interrupts(3) := recvCompQueue2.io.deq.valid && intMask(3)
+
   val sendReqSpace = (qDepth.U - sendReqCount)
   val recvReqSpace = (qDepth.U - recvReqCount)
+  
+  val sendReqSpace2 = (qDepth.U - sendReqCount2)
+  val recvReqSpace2 = (qDepth.U - recvReqCount2)
 
   def sendCompRead = (ready: Bool) => {
     sendCompDown := sendCompValid && ready
     (sendCompValid, true.B)
   }
 
+  def sendCompRead2 = (ready: Bool) => {                                                                                                       
+    sendCompDown2 := sendCompValid2 && ready
+    (sendCompValid2, true.B)
+  }
+  
   val txcsumReqQueue = Module(new HellaQueue(qDepth)(UInt(49.W)))
   val rxcsumResQueue = Module(new HellaQueue(qDepth)(UInt(2.W)))
   val csumEnable = RegInit(false.B)
 
+  val txcsumReqQueue2 = Module(new HellaQueue(qDepth)(UInt(49.W)))
+  val rxcsumResQueue2 = Module(new HellaQueue(qDepth)(UInt(2.W)))
+  val csumEnable2 = RegInit(false.B)
+
+  // initialize csum data structures for core1
   io.txcsumReq.valid := txcsumReqQueue.io.deq.valid
   io.txcsumReq.bits := txcsumReqQueue.io.deq.bits.asTypeOf(new ChecksumRewriteRequest)
   txcsumReqQueue.io.deq.ready := io.txcsumReq.ready
@@ -149,6 +207,18 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
 
   io.csumEnable := csumEnable
 
+
+  // initialize csum data structures for core2 
+  io.txcsumReq2.valid := txcsumReqQueue2.io.deq.valid
+  io.txcsumReq2.bits := txcsumReqQueue2.io.deq.bits.asTypeOf(new ChecksumRewriteRequest)
+  txcsumReqQueue2.io.deq.ready := io.txcsumReq2.ready
+  
+  rxcsumResQueue2.io.enq.valid := io.rxcsumRes2.valid
+  rxcsumResQueue2.io.enq.bits := io.rxcsumRes2.bits.asUInt
+  io.rxcsumRes2.ready := rxcsumResQueue2.io.enq.ready
+
+  io.csumEnable2 := csumEnable2
+  
   regmap(
     0x00 -> Seq(RegField.w(NET_IF_WIDTH, sendReqQueue.io.enq)),
     0x08 -> Seq(RegField.w(NET_IF_WIDTH, recvReqQueue.io.enq)),
@@ -163,7 +233,28 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
     0x20 -> Seq(RegField(2, intMask)),
     0x28 -> Seq(RegField.w(49, txcsumReqQueue.io.enq)),
     0x30 -> Seq(RegField.r(2, rxcsumResQueue.io.deq)),
-    0x31 -> Seq(RegField(1, csumEnable)))
+    0x31 -> Seq(RegField(1, csumEnable)),
+    0x32 -> Seq(RegField(8, coreMem1)),
+    
+    // Set2 of MMIO registers
+    0x33 -> Seq(RegField.w(NET_IF_WIDTH, sendReqQueue2.io.enq)),
+    0x3b -> Seq(RegField.w(NET_IF_WIDTH, recvReqQueue2.io.enq)),
+    0x43 -> Seq(RegField.r(1, sendCompRead2)),
+    0x45 -> Seq(RegField.r(NET_LEN_BITS, recvCompQueue2.io.deq)),
+    0x47 -> Seq(
+      RegField.r(8, sendReqSpace2),
+      RegField.r(8, recvReqSpace2),
+      RegField.r(8, sendCompCount2),
+      RegField.r(8, recvCompCount2)),       
+   
+    // TODO: update the lower regmap --- check if diff macAddr needed!!
+    0x4b -> Seq(RegField.r(ETH_MAC_BITS, io.macAddr2)),
+    0x53 -> Seq(RegField(2, intMask2)),
+    0x5b -> Seq(RegField.w(49, txcsumReqQueue2.io.enq)),
+    0x63 -> Seq(RegField.r(2, rxcsumResQueue2.io.deq)),
+    0x64 -> Seq(RegField(1, csumEnable2)), 
+    0x65 -> Seq(RegField(8, coreMem2))) 
+
 }
 
 case class IceNicControllerParams(address: BigInt, beatBytes: Int)
@@ -174,7 +265,18 @@ case class IceNicControllerParams(address: BigInt, beatBytes: Int)
 class IceNicController(c: IceNicControllerParams)(implicit p: Parameters)
   extends TLRegisterRouter(
     c.address, "ice-nic", Seq("ucbbar,ice-nic"),
-    interrupts = 2, beatBytes = c.beatBytes)(
+
+}
+
+case class IceNicControllerParams(address: BigInt, beatBytes: Int)
+
+/*
+ * Take commands from the CPU over TL2, expose as Queues
+ */
+class IceNicController(c: IceNicControllerParams)(implicit p: Parameters)
+  extends TLRegisterRouter(
+    c.address, "ice-nic", Seq("ucbbar,ice-nic"),
+    interrupts = 5, beatBytes = c.beatBytes)(
       new TLRegBundle(c, _)    with IceNicControllerBundle)(
       new TLRegModule(c, _, _) with IceNicControllerModule)
 
@@ -572,17 +674,6 @@ trait CanHavePeripheryIceNIC  { this: BaseSubsystem =>
     }
     outer_io
   }
-}
-
-
-object NicLoopback {
-  def connect(net: Option[NICIOvonly], nicConf: Option[NICConfig], qDepth: Int, latency: Int = 10) {
-    net.foreach { netio =>
-      import PauseConsts.BT_PER_QUANTA
-      val packetWords = nicConf.get.packetMaxBytes / NET_IF_BYTES
-      val packetQuanta = (nicConf.get.packetMaxBytes * 8) / BT_PER_QUANTA
-      netio.macAddr := PlusArg("macaddr")
-      netio.rlimit.inc := PlusArg("rlimit-inc", 1)
       netio.rlimit.period := PlusArg("rlimit-period", 1)
       netio.rlimit.size := PlusArg("rlimit-size", 8)
       netio.pauser.threshold := PlusArg("pauser-threshold", 2 * packetWords + latency)
