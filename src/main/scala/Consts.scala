@@ -7,6 +7,7 @@ object IceNetConsts {
   val NET_IF_BYTES = NET_IF_WIDTH/8
   val NET_LEN_BITS = 16
 
+  // Add constant for send/recv Packet Buffer requests
   val BUF_REQ_BITS = 8
 
   val NET_IP_ALIGN = 2
