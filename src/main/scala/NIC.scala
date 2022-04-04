@@ -257,7 +257,7 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
 
 }
 
-// updated version of MMIO interface
+// step2: pdated version of MMIO interface
 
 case class IceNicControllerParams(address: BigInt, beatBytes: Int)
 
