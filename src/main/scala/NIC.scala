@@ -197,7 +197,8 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   val sendCompValid = sendCompCount > 0.U
   val sendCompValid2 = sendCompCount2 > 0.U
   
-  val intMask = RegInit(0.U(4.W))
+  val intMask = RegInit(0.U(2.W))
+  val intMask2 = RegInit(0.U(2.W))
 
   //val core1 = RegInit(1.U(CORE_ID_BITS.W))
   //val core2 = RegInit(2.U(CORE_ID_BITS.W))
@@ -251,8 +252,8 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   interrupts(0) := sendCompValid && intMask(0)
   interrupts(1) := recvCompQueue.io.deq.valid && intMask(1)
 
-  interrupts(2) := sendCompValid2 && intMask(2) 
-  interrupts(3) := recvCompQueue2.io.deq.valid && intMask(3)
+  interrupts(2) := sendCompValid2 && intMask2(0) 
+  interrupts(3) := recvCompQueue2.io.deq.valid && intMask2(1)
 
   val sendReqSpace = (qDepth.U - sendReqCount)
   val recvReqSpace = (qDepth.U - recvReqCount)
@@ -348,7 +349,8 @@ case class IceNicControllerParams(address: BigInt, beatBytes: Int)
 
 /*
  * Take commands from the CPU over TL2, expose as Queues
- */
+*/
+
 class IceNicController(c: IceNicControllerParams)(implicit p: Parameters)
   extends TLRegisterRouter(
     c.address, "ice-nic", Seq("ucbbar,ice-nic"),
