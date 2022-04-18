@@ -26,6 +26,9 @@ class StreamReader(nXacts: Int, outFlits: Int, maxBytes: Int)
       val req = Flipped(Decoupled(new StreamReadRequest))
       val resp = Decoupled(Bool())
       val out = Decoupled(new StreamChannel(dataBits))
+      //TODO: added a coreID field
+      val coreID = Flipped(Decoupled(UInt(CORE_ID_BITS.W)))
+      
     })
 
     core.module.io.req <> io.req
