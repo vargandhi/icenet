@@ -365,7 +365,7 @@ case class IceNicControllerParams(address: BigInt, beatBytes: Int)
 class IceNicController(c: IceNicControllerParams)(implicit p: Parameters)
   extends TLRegisterRouter(
     c.address, "ice-nic", Seq("ucbbar,ice-nic"),
-    interrupts = 5, beatBytes = c.beatBytes)(
+    interrupts = 4, beatBytes = c.beatBytes)(
       new TLRegBundle(c, _)    with IceNicControllerBundle)(
       new TLRegModule(c, _, _) with IceNicControllerModule)
 
