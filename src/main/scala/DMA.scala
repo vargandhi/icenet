@@ -199,6 +199,7 @@ class StreamWriter(nXacts: Int, maxBytes: Int)
       val req = Flipped(Decoupled(new StreamWriteRequest))
       val resp = Decoupled(UInt(lenBits.W))
       val in = Flipped(Decoupled(new StreamChannel(dataBits)))
+      val coreID = Flipped(Decoupled(UInt(CORE_ID_BITS.W)))
     })
 
     val s_idle :: s_data :: s_resp :: Nil = Enum(3)

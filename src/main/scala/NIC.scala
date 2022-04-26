@@ -333,7 +333,7 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
       RegField.r(8, sendCompCount2),
       RegField.r(8, recvCompCount2)),       
    
-    // TODO: update the lower regmap --- check if diff macAddr needed!!
+    // TODO: check if diff macAddr needed!!
     0x58 -> Seq(RegField.r(ETH_MAC_BITS, io.macAddr2)),
     0x60 -> Seq(RegField(2, intMask2)),
     0x68 -> Seq(RegField.w(49, txcsumReqQueue2.io.enq)),
@@ -341,19 +341,6 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
     0x71 -> Seq(RegField(1, csumEnable2)), 
     0x72 -> Seq(RegField.w(BUF_REQ_BITS, coreSendMem2)),
     0x73 -> Seq(RegField.w(BUF_REQ_BITS, coreRecvMem2))) 
-
-}
-
-
-case class IceNicControllerParams(address: BigInt, beatBytes: Int)
-
-/*
- * Take commands from the CPU over TL2, expose as Queues
-*/
-
-class IceNicController(c: IceNicControllerParams)(implicit p: Parameters)
-  extends TLRegisterRouter(
-    c.address, "ice-nic", Seq("ucbbar,ice-nic"),
 
 }
 
@@ -401,13 +388,17 @@ class IceNicSendPath(nInputTaps: Int = 0)(implicit p: Parameters)
   
   // ---*** decide which comp signal to send based on req/core ***---
 
-    when (readreqCore === 1.U){
-        //TODO: set valid bits of comp2 to false?
+    when (readreqCore === UInt(1)){
+        //TODO - done -- set valid bits of comp2 to false?
         //TODO: decrement core1 counter 
+        
         io.send.comp <> reader.module.io.resp
-    }.elsewhen(readreqCore === 2.U){       
+        io.send.comp2.valid := false.B
+    }.elsewhen(readreqCore === UInt(2)){       
         io.send.comp2 <> reader.module.io.resp
-        // TODO: set valid bits of comp to false?
+        io.send.comp.valid := false.B
+
+        // TODO - done - set valid bits of comp to false?
         // TODO: decrement core2 counter
     }.otherwise{
         //do nothing
@@ -463,7 +454,7 @@ class IceNicWriter(implicit p: Parameters) extends NICLazyModule {
 
   lazy val module = new LazyModuleImp(this) {
     val io = IO(new Bundle {
-      val recv = Flipped(new IceNicRecvIO)
+      val recv = Flipped(new IceNicGlobalRecvIO)
       val in = Flipped(Decoupled(new StreamChannel(NET_IF_WIDTH)))
       val length = Flipped(Valid(UInt(NET_LEN_BITS.W)))
     })
@@ -471,22 +462,35 @@ class IceNicWriter(implicit p: Parameters) extends NICLazyModule {
     val streaming = RegInit(false.B)
     val byteAddrBits = log2Ceil(NET_IF_BYTES)
     val helper = DecoupledHelper(
-      io.recv.req.valid,
+      io.recv.req.req.valid,
       writer.module.io.req.ready,
       io.length.valid, !streaming)
 
     writer.module.io.req.valid := helper.fire(writer.module.io.req.ready)
-    writer.module.io.req.bits.address := io.recv.req.bits
+    writer.module.io.req.bits.address := io.recv.req.req.bits
     writer.module.io.req.bits.length := io.length.bits
-    io.recv.req.ready := helper.fire(io.recv.req.valid)
+    writer.module.io.coreID := io.recv.req.coreID
+
+    io.recv.req.req.ready := helper.fire(io.recv.req.req.valid)
 
     writer.module.io.in.valid := io.in.valid && streaming
     writer.module.io.in.bits := io.in.bits
     io.in.ready := writer.module.io.in.ready && streaming
 
-    io.recv.comp <> writer.module.io.resp
+    val readreqCore := writer.module.io.coreID
 
-    when (io.recv.req.fire) { streaming := true.B }
+// TODO - done-  set/toggle relevant valid bits true/false    
+    when(readreqCore === UInt(1)){
+        io.recv.comp <> writer.module.io.resp
+        io.recv.comp2.valid := false.B 
+    }.elsewhen(readreqCore === UInt(2)){
+        io.recv.comp2 <> writer.module.io.resp
+        io.recv.comp.valid := false.B
+    }.otherwise{
+      //do nothing
+    }
+
+    when (io.recv.req.req.fire) { streaming := true.B }
     when (io.in.fire && io.in.bits.last) { streaming := false.B }
   }
 }
@@ -505,7 +509,7 @@ class IceNicRecvPath(val tapFuncs: Seq[EthernetHeader => Bool] = Nil)
 class IceNicRecvPathModule(outer: IceNicRecvPath)
     extends LazyModuleImp(outer) with HasNICParameters {
   val io = IO(new Bundle {
-    val recv = Flipped(new IceNicRecvIO)
+    val recv = Flipped(new IceNicGlobalRecvIO)
     val in = Flipped(Decoupled(new StreamChannel(NET_IF_WIDTH))) // input stream
     val tap = Vec(outer.tapFuncs.length, Decoupled(new StreamChannel(NET_IF_WIDTH)))
     val csum = checksumOffload.option(new Bundle {
@@ -574,16 +578,18 @@ class IceNicRecvPathModule(outer: IceNicRecvPath)
     val recvreq = Wire(Decoupled(UInt(NET_IF_WIDTH.W)))
     val reqq = Module(new Queue(UInt(NET_IF_WIDTH.W), 1))
 
+//TODO - done  update io.recv.req to io.recv.req.req
+
     val enqHelper = DecoupledHelper(
-      io.recv.req.valid, reqq.io.enq.ready, recvreq.ready)
+      io.recv.req.req.valid, reqq.io.enq.ready, recvreq.ready)
     val deqHelper = DecoupledHelper(
       bufout.valid, offloadReady, out.ready, reqq.io.deq.valid)
 
     reqq.io.enq.valid := enqHelper.fire(reqq.io.enq.ready)
-    reqq.io.enq.bits := io.recv.req.bits
-    io.recv.req.ready := enqHelper.fire(io.recv.req.valid)
+    reqq.io.enq.bits := io.recv.req.req.bits
+    io.recv.req.req.ready := enqHelper.fire(io.recv.req.req.valid)
     recvreq.valid := enqHelper.fire(recvreq.ready)
-    recvreq.bits := io.recv.req.bits
+    recvreq.bits := io.recv.req.req.bits
 
     out.valid := deqHelper.fire(out.ready)
     out.bits  := bufout.bits
@@ -597,9 +603,18 @@ class IceNicRecvPathModule(outer: IceNicRecvPath)
     (out, recvreq)
   } else { (bufout, io.recv.req) })
 
+  //TODO - done -  updated io.recv.req to io.recv.req.req
+  
   val writer = outer.writer.module
+  
   writer.io.recv.req <> Queue(recvreq, 1)
+ 
+//TODO: done -- core comp queue connection logic
+  
   io.recv.comp <> writer.io.recv.comp
+  io.recv.comp2 <> writer.io.recv.comp2
+
+  
   writer.io.in <> csumout
   writer.io.length.valid := buflen.valid
   writer.io.length.bits  := buflen.bits
@@ -655,9 +670,9 @@ class IceNIC(address: BigInt, beatBytes: Int = 8,
       val tapIn = Flipped(Vec(nInputTaps, Decoupled(new StreamChannel(NET_IF_WIDTH))))
     })
  
-//TODO: updated sendpath and receive path connections with the controller queues
+//TODO: -done -- updated sendpath and receive path connections with the new primary controller queues
     sendPath.module.io.send <> control.module.io.sendMain
-    recvPath.module.io.recv <> control.module.io.recv
+    recvPath.module.io.recv <> control.module.io.recvMain
 
 
 
