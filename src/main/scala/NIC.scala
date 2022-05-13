@@ -75,14 +75,14 @@ class IceNicSendIO extends Bundle {
 
 class IceNicCoreSendReq extends Bundle {
   val req = Decoupled(UInt(NET_IF_WIDTH.W))
+  val ireq = Flipped(Decoupled(UInt(NET_IF_WIDTH.W)))
   val coreID = Decoupled(UInt(CORE_ID_BITS.W)) 
 }
 
-
-//TODO: check if trait works
-trait IceNicGlobalSendIO extends Bundle {   
+class IceNicGlobalSendIO extends Bundle {   
   
-  val req = new IceNicCoreSendReq
+  val req = Decoupled(UInt(NET_IF_WIDTH.W))
+  val coreID = Output(UInt(CORE_ID_BITS.W))
   val comp = Flipped(Decoupled(Bool()))
   val comp2 = Flipped(Decoupled(Bool()))
   
@@ -95,11 +95,11 @@ class IceNicRecvIO extends Bundle {
 
 class IceNicCoreRecvReq extends Bundle {
     val req = Decoupled(UInt(NET_IF_WIDTH.W))
+    val ireq = Flipped(Decoupled(UInt(NET_IF_WIDTH.W)))
     val coreID = Decoupled(UInt(CORE_ID_BITS.W))
 }
 
-//TODO: check if trait works
-trait IceNicGlobalRecvIO extends Bundle {
+class IceNicGlobalRecvIO extends Bundle {
   val req = new IceNicCoreRecvReq
   val comp = Flipped(Decoupled(UInt(NET_LEN_BITS.W)))
   val comp2 = Flipped(Decoupled(UInt(NET_LEN_BITS.W))) 
@@ -134,11 +134,11 @@ trait IceNicControllerBundle extends Bundle {
   val csumEnable = Output(Bool())
   val csumEnable2 = Output(Bool())
 
-  val coreSendMem1 = Input(UInt(BUF_REQ_BITS.W))
-  val coreSendMem2 = Input(UInt(BUF_REQ_BITS.W))
+  val coreSendMem1 = Output(UInt(BUF_REQ_BITS.W))
+  val coreSendMem2 = Output(UInt(BUF_REQ_BITS.W))
 
-  val coreRecvMem1 = Input(UInt(BUF_REQ_BITS.W))
-  val coreRecvMem1 = Input(UInt(BUF_REQ_BITS.W))
+  val coreRecvMem1 = Output(UInt(BUF_REQ_BITS.W))
+  val coreRecvMem2 = Output(UInt(BUF_REQ_BITS.W))
 
 }
 
@@ -193,27 +193,49 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   val intMask = RegInit(0.U(2.W))
   val intMask2 = RegInit(0.U(2.W))
 
+  val core1 = RegInit(1.U(CORE_ID_BITS.W))
+  val core2 = RegInit(2.U(CORE_ID_BITS.W))
+
+
   io.send.req <> sendReqQueue.io.deq
   io.send2.req <> sendReqQueue2.io.deq
   
-  io.sendCoreReq1.req <> io.send.req
-  io.sendCoreReq1.coreID := 1.U 
 
-  io.sendCoreReq2.req <> io.send2.req
-  io.sendCoreReq2.coreID := 2.U
+  val reqArb = Module(new RRArbiter(UInt(CORE_ID_BITS.W),2))
 
-  val sendReqArb = Module(new RRArbiter(IceNicCoreSendReq,2))
-  
   //TODO: Add counter logic as ready/valid bool bits
-  sendReqArb.io.in(0) <> io.sendCoreReq1
-  sendReqArb.io.in(1) <> io.sendCoreReq2
+  
 
-  io.sendMain.req <> sendReqArb.io.out
-  io.sendMain.comp <> io.send.comp
-  io.sendMain.comp2 <> io.send2.comp
+  reqArb.io.in(0).valid := true.B
+  reqArb.io.in(1).valid := true.B
+
+  reqArb.io.in(0).bits := 1.U(CORE_ID_BITS.W)
+  reqArb.io.in(1).bits := 2.U(CORE_ID_BITS.W)
+
+  //io.sendMain.coreID.valid := true.B
+
+  io.sendMain.coreID := reqArb.io.out.bits
+  
+  when(io.sendMain.coreID.asUInt === 1.U(CORE_ID_BITS.W)){
+
+      io.sendMain.req.valid := io.send.req.valid
+      io.sendMain.req.bits := io.send.req.bits
+     
+  }.elsewhen(io.sendMain.coreID.asUInt === 2.U(CORE_ID_BITS.W)){
+      io.sendMain.req.valid := io.send2.req.valid 
+      io.sendMain.req.bits := io.send2.req.bits
+  
+  }.otherwise {
+    //do nothing
+ }
+
+//TODO: connect io.send.comp and io.send.comp2 directly to sendPath
+
  
   io.send.comp.ready := sendCompCount < qDepth.U
   io.send2.comp.ready := sendCompCount2 < qDepth.U
+
+/*------------SEND PATH CONTROLLER LOGIC ENDS HERE-------------*/
 
   io.recv.req <> recvReqQueue.io.deq
   recvCompQueue.io.enq <> io.recv.comp
@@ -221,13 +243,8 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   io.recv2.req <> recvReqQueue2.io.deq
   recvCompQueue2.io.enq <> io.recv2.comp
 
-  io.recvCoreReq1.req <> io.recv.req
-  io.recvCoreReq1.coreID := 1.U
 
-  io.recvCoreReq1.req <> io.recv.req
-  io.recvCoreReq1.coreID := 2.U 
-
-  val recvReqArb = Module(new RRArbiter(IceNicCoreRecvReq,2))
+  val recvReqArb = Module(new RRArbiter(new IceNicCoreRecvReq,2))
 
   recvReqArb.io.in(0) <> io.recvCoreReq1
   recvReqArb.io.in(1) <> io.recvCoreReq2
@@ -235,7 +252,6 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   io.recvMain.req <> recvReqArb.io.out
   io.recvMain.comp <> io.recv.comp
   io.recvMain.comp2 <> io.recv2.comp
-
 
 
   interrupts(0) := sendCompValid && intMask(0)
@@ -250,7 +266,6 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
 
   val sendReqSpace2 = (qDepth.U - sendReqCount2)
   val recvReqSpace2 = (qDepth.U - recvReqCount2)
-
 
 
   def sendCompRead = (ready: Bool) => {
@@ -268,6 +283,10 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   val txcsumReqQueue = Module(new HellaQueue(qDepth)(UInt(49.W)))
   val rxcsumResQueue = Module(new HellaQueue(qDepth)(UInt(2.W)))
   val csumEnable = RegInit(false.B)
+ 
+  // Initialize coreSendMem1 and coreRecvMem1
+  val coreSendMem1 = RegInit(0.U(BUF_REQ_BITS.W))
+  val coreRecvMem1 = RegInit(0.U(BUF_REQ_BITS.W))
 
 
   io.txcsumReq.valid := txcsumReqQueue.io.deq.valid
@@ -279,7 +298,16 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   io.rxcsumRes.ready := rxcsumResQueue.io.enq.ready
 
   io.csumEnable := csumEnable
-  io.coreMem1 := coreMem1
+  io.coreSendMem1 := coreSendMem1
+
+  val txcsumReqQueue2 = Module(new HellaQueue(qDepth)(UInt(49.W)))
+  val rxcsumResQueue2 = Module(new HellaQueue(qDepth)(UInt(2.W)))
+  val csumEnable2 = RegInit(false.B)
+
+  // Initialize coreSendMem2 and coreRecvMem2
+  val coreSendMem2 = RegInit(0.U(BUF_REQ_BITS.W))
+  val coreRecvMem2 = RegInit(0.U(BUF_REQ_BITS.W))
+
 
   // initialize csum data structures for core2 
   io.txcsumReq2.valid := txcsumReqQueue2.io.deq.valid
@@ -291,7 +319,7 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   io.rxcsumRes2.ready := rxcsumResQueue2.io.enq.ready
   
   io.csumEnable2 := csumEnable2
-  io.coreMem2 := coreMem2 
+  io.coreSendMem2 := coreSendMem2 
 
   regmap(
     0x00 -> Seq(RegField.w(NET_IF_WIDTH, sendReqQueue.io.enq)),
@@ -307,7 +335,9 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
     0x20 -> Seq(RegField(2, intMask)),
     0x28 -> Seq(RegField.w(49, txcsumReqQueue.io.enq)),
     0x30 -> Seq(RegField.r(2, rxcsumResQueue.io.deq)),
-    0x31 -> Seq(RegField(1, csumEnable))
+    0x31 -> Seq(RegField(1, csumEnable)),
+    0x32 -> Seq(RegField.w(BUF_REQ_BITS, coreSendMem1)),
+    0x33 -> Seq(RegField.w(BUF_REQ_BITS, coreRecvMem1)),
 
     // Set2 of MMIO registers
     0x40 -> Seq(RegField.w(NET_IF_WIDTH, sendReqQueue2.io.enq)),
@@ -338,7 +368,7 @@ case class IceNicControllerParams(address: BigInt, beatBytes: Int)
 class IceNicController(c: IceNicControllerParams)(implicit p: Parameters)
   extends TLRegisterRouter(
     c.address, "ice-nic", Seq("ucbbar,ice-nic"),
-    interrupts = 2, beatBytes = c.beatBytes)(
+    interrupts = 4, beatBytes = c.beatBytes)(
       new TLRegBundle(c, _)    with IceNicControllerBundle)(
       new TLRegModule(c, _, _) with IceNicControllerModule)
 

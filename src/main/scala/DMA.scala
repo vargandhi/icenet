@@ -6,6 +6,7 @@ import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.diplomacy.{LazyModule, LazyModuleImp, IdRange}
 import freechips.rocketchip.util.DecoupledHelper
 import testchipip.{StreamChannel, TLHelper}
+import IceNetConsts._
 
 class StreamReadRequest extends Bundle {
   val address = UInt(48.W)
