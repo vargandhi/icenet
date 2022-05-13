@@ -73,11 +73,6 @@ class IceNicSendIO extends Bundle {
   val comp = Flipped(Decoupled(Bool()))
 }
 
-class IceNicCoreSendReq extends Bundle {
-  val req = Decoupled(UInt(NET_IF_WIDTH.W))
-  val ireq = Flipped(Decoupled(UInt(NET_IF_WIDTH.W)))
-  val coreID = Decoupled(UInt(CORE_ID_BITS.W)) 
-}
 
 class IceNicGlobalSendIO extends Bundle {   
   
@@ -93,14 +88,10 @@ class IceNicRecvIO extends Bundle {
   val comp = Flipped(Decoupled(UInt(NET_LEN_BITS.W)))
 }
 
-class IceNicCoreRecvReq extends Bundle {
-    val req = Decoupled(UInt(NET_IF_WIDTH.W))
-    val ireq = Flipped(Decoupled(UInt(NET_IF_WIDTH.W)))
-    val coreID = Decoupled(UInt(CORE_ID_BITS.W))
-}
 
 class IceNicGlobalRecvIO extends Bundle {
   val req = new IceNicCoreRecvReq
+  val coreID = Output(UInt(CORE_ID_BITS.W))
   val comp = Flipped(Decoupled(UInt(NET_LEN_BITS.W)))
   val comp2 = Flipped(Decoupled(UInt(NET_LEN_BITS.W))) 
 }
@@ -212,8 +203,7 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   reqArb.io.in(0).bits := 1.U(CORE_ID_BITS.W)
   reqArb.io.in(1).bits := 2.U(CORE_ID_BITS.W)
 
-  //io.sendMain.coreID.valid := true.B
-
+/*------------SEND PATH CONTROLLER INTERFACE LOGIC BEGINS HERE-------------*/
   io.sendMain.coreID := reqArb.io.out.bits
   
   when(io.sendMain.coreID.asUInt === 1.U(CORE_ID_BITS.W)){
@@ -235,7 +225,9 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   io.send.comp.ready := sendCompCount < qDepth.U
   io.send2.comp.ready := sendCompCount2 < qDepth.U
 
-/*------------SEND PATH CONTROLLER LOGIC ENDS HERE-------------*/
+/*------------SEND PATH CONTROLLER INTERFACE LOGIC ENDS HERE-------------*/
+
+/*------ RECV PATH CONTROLLER INTERFACE LOGIC BEGINS HERE----*/
 
   io.recv.req <> recvReqQueue.io.deq
   recvCompQueue.io.enq <> io.recv.comp
@@ -243,16 +235,24 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   io.recv2.req <> recvReqQueue2.io.deq
   recvCompQueue2.io.enq <> io.recv2.comp
 
+  io.recvMain.coreID := reqArb.io.out.bits
+  
+  when(io.sendMain.coreID.asUInt === 1.U(CORE_ID_BITS.W)){  
+      
+      io.recvMain.req.valid := io.recv.req.valid
+      io.recvMain.req.bits := io.recv.req.bits
+  
+  }.elsewhen(io.sendMain.coreID.asUInt === 2.U(CORE_ID_BITS.W)){
+      
+      io.recvMain.req.valid := io.recv2.req.valid
+      io.recvMain.req.bits := io.recv2.req.bits 
 
-  val recvReqArb = Module(new RRArbiter(new IceNicCoreRecvReq,2))
+  }.other{
+    
+    // do nothing
+  }
 
-  recvReqArb.io.in(0) <> io.recvCoreReq1
-  recvReqArb.io.in(1) <> io.recvCoreReq2
-
-  io.recvMain.req <> recvReqArb.io.out
-  io.recvMain.comp <> io.recv.comp
-  io.recvMain.comp2 <> io.recv2.comp
-
+/*------ RECV PATH CONTROLLER INTERFACE LOGIC ENDS HERE----*/
 
   interrupts(0) := sendCompValid && intMask(0)
   interrupts(1) := recvCompQueue.io.deq.valid && intMask(1)
