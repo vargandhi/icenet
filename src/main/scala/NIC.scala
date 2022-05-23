@@ -73,13 +73,17 @@ class IceNicSendIO extends Bundle {
   val comp = Flipped(Decoupled(Bool()))
 }
 
+class IceNicCoreSendIO extends Bundle {
+  val req = Decoupled(UInt(NET_IF_WIDTH.W))
+  val coreID = Output(UInt(CORE_ID_BITS.W))
+
+}
 
 class IceNicGlobalSendIO extends Bundle {   
   
   val req = Decoupled(UInt(NET_IF_WIDTH.W))
   val coreID = Output(UInt(CORE_ID_BITS.W))
   val comp = Flipped(Decoupled(Bool()))
-  val comp2 = Flipped(Decoupled(Bool()))
   
 }
 
@@ -88,12 +92,16 @@ class IceNicRecvIO extends Bundle {
   val comp = Flipped(Decoupled(UInt(NET_LEN_BITS.W)))
 }
 
+class IceNicCoreRecvIO extends Bundle {
+  val req = Decoupled(UInt(NET_IF_WIDTH.W))
+  val coreID = Output(UInt(CORE_ID_BITS.W))
+}
 
 class IceNicGlobalRecvIO extends Bundle {
-  val req = new IceNicCoreRecvReq
+  val req = Decoupled(UInt(NET_IF_WIDTH.W))
   val coreID = Output(UInt(CORE_ID_BITS.W))
   val comp = Flipped(Decoupled(UInt(NET_LEN_BITS.W)))
-  val comp2 = Flipped(Decoupled(UInt(NET_LEN_BITS.W))) 
+  val comp2 = Flipped(Decoupled(UInt(NET_LEN_BITS.W)))
 }
 
 
@@ -104,14 +112,8 @@ trait IceNicControllerBundle extends Bundle {
   val recv = new IceNicRecvIO
   val recv2 = new IceNicRecvIO
 
-  val sendCoreReq1 = new IceNicCoreSendReq
-  val sendCoreReq2 = new IceNicCoreSendReq
-
-  val recvCoreReq1 = new IceNicCoreRecvReq
-  val recvCoreReq2 = new IceNicCoreRecvReq
-
-  val sendMain = new IceNicGlobalSendIO
-  val recvMain = new IceNicGlobalRecvIO
+  val sendMain = new IceNicCoreSendIO
+  val recvMain = new IceNicCoreRecvIO
 
   val macAddr = Input(UInt(ETH_MAC_BITS.W))
   val macAddr2 = Input(UInt(ETH_MAC_BITS.W))
@@ -152,7 +154,6 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   
   val sendReqQueue2 = Module(new HellaQueue(qDepth)(UInt(NET_IF_WIDTH.W)))
   val sendReqCount2 = queueCount(sendReqQueue2.io, qDepth)
-
 
 
   // hold addr of buffers we can write received packets into
@@ -204,6 +205,8 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
   reqArb.io.in(1).bits := 2.U(CORE_ID_BITS.W)
 
 /*------------SEND PATH CONTROLLER INTERFACE LOGIC BEGINS HERE-------------*/
+  
+  reqArb.io.out.ready := true.B
   io.sendMain.coreID := reqArb.io.out.bits
   
   when(io.sendMain.coreID.asUInt === 1.U(CORE_ID_BITS.W)){
@@ -237,17 +240,18 @@ trait IceNicControllerModule extends HasRegMap with HasNICParameters {
 
   io.recvMain.coreID := reqArb.io.out.bits
   
-  when(io.sendMain.coreID.asUInt === 1.U(CORE_ID_BITS.W)){  
+  when(io.recvMain.coreID.asUInt === 1.U(CORE_ID_BITS.W)){  
       
       io.recvMain.req.valid := io.recv.req.valid
       io.recvMain.req.bits := io.recv.req.bits
+      
   
-  }.elsewhen(io.sendMain.coreID.asUInt === 2.U(CORE_ID_BITS.W)){
+  }.elsewhen(io.recvMain.coreID.asUInt === 2.U(CORE_ID_BITS.W)){
       
       io.recvMain.req.valid := io.recv2.req.valid
-      io.recvMain.req.bits := io.recv2.req.bits 
+      io.recvMain.req.bits := io.recv2.req.bits
 
-  }.other{
+  }.otherwise {
     
     // do nothing
   }
@@ -380,7 +384,9 @@ class IceNicSendPath(nInputTaps: Int = 0)(implicit p: Parameters)
 
   lazy val module = new LazyModuleImp(this) {
     val io = IO(new Bundle {
-      val send = Flipped(new IceNicSendIO)
+      val send = Flipped(new IceNicGlobalSendIO)
+      val comp = Decoupled(Bool())
+      val comp2 = Decoupled(Bool())
       val tap = Flipped(Vec(nInputTaps, Decoupled(new StreamChannel(NET_IF_WIDTH))))
       val out = Decoupled(new StreamChannel(NET_IF_WIDTH))
       val rlimit = Input(new RateLimiterSettings)
@@ -396,7 +402,20 @@ class IceNicSendPath(nInputTaps: Int = 0)(implicit p: Parameters)
     readreq.bits.address := io.send.req.bits(47, 0)
     readreq.bits.length  := io.send.req.bits(62, 48)
     readreq.bits.partial := io.send.req.bits(63)
+
     io.send.comp <> reader.module.io.resp
+
+    when (io.send.coreID.asUInt === 1.U && io.send.comp.valid === true.B){
+	io.comp.valid := true.B
+        io.comp2.valid := false.B
+        io.comp.bits := io.send.comp.bits
+    }.elsewhen(io.send.coreID.asUInt === 2.U && io.send.comp.valid === true.B){
+        io.comp.valid := false.B
+        io.comp2.valid := true.B
+        io.comp2.bits := io.send.comp.bits
+    }.otherwise{
+      //do nothing
+    }    
 
     val preArbOut = if (checksumOffload) {
       val readerOut = reader.module.io.out
@@ -447,7 +466,11 @@ class IceNicWriter(implicit p: Parameters) extends NICLazyModule {
 
   lazy val module = new LazyModuleImp(this) {
     val io = IO(new Bundle {
-      val recv = Flipped(new IceNicRecvIO)
+      val recv = Flipped(new IceNicGlobalRecvIO)
+      
+      //val comp = Flipped(Decoupled(UInt(NET_LEN_BITS.W)))
+      //val comp2 = Flipped(Decoupled(UInt(NET_LEN_BITS.W)))
+
       val in = Flipped(Decoupled(new StreamChannel(NET_IF_WIDTH)))
       val length = Flipped(Valid(UInt(NET_LEN_BITS.W)))
     })
@@ -467,9 +490,17 @@ class IceNicWriter(implicit p: Parameters) extends NICLazyModule {
     writer.module.io.in.valid := io.in.valid && streaming
     writer.module.io.in.bits := io.in.bits
     io.in.ready := writer.module.io.in.ready && streaming
+    
+    //io.recv.comp <> writer.module.io.resp
+    //io.recv.comp2 <> writer.module.io.resp
+  
+    when (io.recv.coreID.asUInt === 1.U){
+      io.recv.comp <> writer.module.io.resp
+    }.elsewhen(io.recv.coreID.asUInt === 2.U){
+      io.recv.comp2 <> writer.module.io.resp
+    }
 
-    io.recv.comp <> writer.module.io.resp
-
+ 
     when (io.recv.req.fire) { streaming := true.B }
     when (io.in.fire && io.in.bits.last) { streaming := false.B }
   }
@@ -489,7 +520,9 @@ class IceNicRecvPath(val tapFuncs: Seq[EthernetHeader => Bool] = Nil)
 class IceNicRecvPathModule(outer: IceNicRecvPath)
     extends LazyModuleImp(outer) with HasNICParameters {
   val io = IO(new Bundle {
-    val recv = Flipped(new IceNicRecvIO)
+    val recv = Flipped(new IceNicGlobalRecvIO)
+    
+
     val in = Flipped(Decoupled(new StreamChannel(NET_IF_WIDTH))) // input stream
     val tap = Vec(outer.tapFuncs.length, Decoupled(new StreamChannel(NET_IF_WIDTH)))
     val csum = checksumOffload.option(new Bundle {
@@ -583,7 +616,11 @@ class IceNicRecvPathModule(outer: IceNicRecvPath)
 
   val writer = outer.writer.module
   writer.io.recv.req <> Queue(recvreq, 1)
+  writer.io.recv.coreID <> io.recv.coreID 
+ 
   io.recv.comp <> writer.io.recv.comp
+  io.recv.comp2 <> writer.io.recv.comp2
+ 
   writer.io.in <> csumout
   writer.io.length.valid := buflen.valid
   writer.io.length.bits  := buflen.bits
@@ -639,8 +676,15 @@ class IceNIC(address: BigInt, beatBytes: Int = 8,
       val tapIn = Flipped(Vec(nInputTaps, Decoupled(new StreamChannel(NET_IF_WIDTH))))
     })
 
-    sendPath.module.io.send <> control.module.io.send
-    recvPath.module.io.recv <> control.module.io.recv
+    sendPath.module.io.send.req <> control.module.io.sendMain.req
+    sendPath.module.io.send.coreID <> control.module.io.sendMain.coreID
+    sendPath.module.io.comp <> control.module.io.send.comp
+    sendPath.module.io.comp2 <> control.module.io.send2.comp 
+
+    recvPath.module.io.recv.req <> control.module.io.recvMain.req
+    recvPath.module.io.recv.coreID <> control.module.io.recvMain.coreID
+    recvPath.module.io.recv.comp <> control.module.io.recv.comp
+    recvPath.module.io.recv.comp2 <> control.module.io.recv2.comp
 
     // connect externally
     if (usePauser) {
