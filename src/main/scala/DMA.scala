@@ -6,6 +6,7 @@ import freechips.rocketchip.config.Parameters
 import freechips.rocketchip.diplomacy.{LazyModule, LazyModuleImp, IdRange}
 import freechips.rocketchip.util.DecoupledHelper
 import testchipip.{StreamChannel, TLHelper}
+import IceNetConsts._
 
 class StreamReadRequest extends Bundle {
   val address = UInt(48.W)
@@ -26,6 +27,9 @@ class StreamReader(nXacts: Int, outFlits: Int, maxBytes: Int)
       val req = Flipped(Decoupled(new StreamReadRequest))
       val resp = Decoupled(Bool())
       val out = Decoupled(new StreamChannel(dataBits))
+      //TODO: added a coreID field
+      val coreID = Flipped(Decoupled(UInt(CORE_ID_BITS.W)))
+      
     })
 
     core.module.io.req <> io.req
@@ -196,6 +200,7 @@ class StreamWriter(nXacts: Int, maxBytes: Int)
       val req = Flipped(Decoupled(new StreamWriteRequest))
       val resp = Decoupled(UInt(lenBits.W))
       val in = Flipped(Decoupled(new StreamChannel(dataBits)))
+      val coreID = Flipped(Decoupled(UInt(CORE_ID_BITS.W)))
     })
 
     val s_idle :: s_data :: s_resp :: Nil = Enum(3)
